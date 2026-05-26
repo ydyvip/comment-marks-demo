@@ -1,21 +1,29 @@
 """
 docx_comment_demo - 为 DOCX 文档批量添加批注
 
-批注 JSON 格式（每条批注精确锚定到"段落 + 段内文本"，避免重复内容误匹配）：
+批注 JSON 格式（支持段落和单元格的统一索引系统）：
 
 [
   {
-    "para_index":  2,           # 段落索引（从 0 开始，可用 list_paragraphs() 查看）
-    "match_text":  "工作成果",   # 在该段落内匹配的文本片段（第一次出现处）
-    "match_occurrence": 1,      # 可选，同段内第几次出现，默认 1
-    "title":       "标题",       # 批注标题（显示在批注正文前）
-    "content":     "批注内容"    # 批注正文
+    "element_index": 2,          # 元素索引（段落或单元格，从 0 开始）
+    "element_type": "paragraph", # 元素类型："paragraph" 或 "cell"
+    "match_text": "工作成果",     # 在该元素内匹配的文本片段（第一次出现处）
+    "match_occurrence": 1,       # 可选，同元素内第几次出现，默认 1
+    "title": "标题",             # 批注标题（显示在批注正文前）
+    "content": "批注内容"        # 批注正文
   }
 ]
 
+优化特性：
+- 统一索引系统：段落和单元格使用连续的索引编号
+- 智能文本匹配：支持跨run的精确文本定位
+- 单元格支持：可以直接在表格单元格内添加批注
+- 便利函数：自动计算派生属性（has_text, is_empty, word_count等）
+
 运行示例：
   python add_comments.py some.docx out.docx annotations.json --author 张三
-  python add_comments.py some.docx --list-paragraphs          # 查看段落结构
+  python add_comments.py some.docx --list-elements          # 查看元素结构
+  python add_comments.py some.docx --document-json my_document.json  # 使用优化后的JSON结构
 """
 
 import json
@@ -145,8 +153,46 @@ def _find_paragraph_by_hierarchy(hierarchy, level=None, keyword=None, exact_leve
 # 列出段落结构（供用户配置 JSON 时参考）
 # ─────────────────────────────────────────────────────────────────
 
-def list_paragraphs(docx_path: str):
-    """打印文档段落结构，方便用户配置 para_index"""
+def list_elements(docx_path: str, document_json_path: str = None):
+    """打印文档元素结构（段落和单元格），方便用户配置 element_index"""
+    
+    # 如果有文档JSON文件，显示优化后的结构
+    if document_json_path and Path(document_json_path).exists():
+        try:
+            with open(document_json_path, 'r', encoding='utf-8') as f:
+                doc_data = json.load(f)
+            
+            print(f"\n📊 优化后的文档结构（基于 {Path(document_json_path).name}）：")
+            print(f"{'索引':>4}  {'类型':<8}  {'样式':<10}  {'位置':<20}  {'内容（前40字）'}")
+            print("─" * 90)
+            
+            for element in doc_data.get("content", []):
+                index = element.get("index", 0)
+                element_type = element.get("element_type", "unknown")
+                style = element.get("style", "其他")
+                text = element.get("text", "")
+                
+                # 构建位置信息
+                position = ""
+                if element_type == "cell":
+                    position = element.get("table_position", "N/A")
+                else:
+                    position = "段落"
+                
+                # 预览文本
+                preview = text[:40].replace("\n", " ") + "..." if len(text) > 40 else text
+                
+                type_label = "段落" if element_type == "paragraph" else "单元格"
+                print(f"  {index:>3}  {type_label:<8}  {style:<10}  {position:<20}  {preview}")
+            
+            print(f"\n💡 提示：使用 element_index 和 element_type 进行批注定位")
+            print(f"     例如：{{\"element_index\": 5, \"element_type\": \"cell\", \"match_text\": \"内容\"}}")
+            return
+            
+        except Exception as e:
+            print(f"⚠️ 无法读取JSON文件: {e}")
+    
+    # 如果没有JSON文件，回退到段落列表
     with tempfile.TemporaryDirectory() as tmp:
         unpacked_dir = Path(tmp) / "unpacked"
         _, msg = unpack(docx_path, str(unpacked_dir))
@@ -159,7 +205,8 @@ def list_paragraphs(docx_path: str):
         "Title": "标题",
     }
 
-    print(f"\n{'索引':>4}  {'样式':<10}  {'段落内容（前50字）'}")
+    print(f"\n📄 传统段落结构（仅段落，不包含单元格）：")
+    print(f"{'索引':>4}  {'样式':<10}  {'段落内容（前50字）'}")
     print("─" * 72)
     for i, para in enumerate(paragraphs):
         style = _para_style(para)
@@ -168,6 +215,7 @@ def list_paragraphs(docx_path: str):
         preview = text[:50].replace("\n", " ")
         print(f"  {i:>3}  {label:<10}  {preview}")
     print()
+    print("💡 提示：推荐使用 --document-json 参数查看完整的段落和单元格结构")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -370,23 +418,36 @@ def add_comments_from_json(
     output_docx: str,
     annotations: list,
     author: str = "Reviewer",
+    document_json_path: str = None,
 ):
     """
     参数
     ----
-    input_docx   : 原始 docx 路径
-    output_docx  : 输出 docx 路径
-    annotations  : 批注对象列表，每项包含：
-                     para_index       段落索引（必填）
-                     match_text       段内匹配文本（必填）
-                     match_occurrence 同段内第几次出现，默认 1
-                     title            批注标题
-                     content          批注正文
-    author       : 批注作者
+    input_docx       : 原始 docx 路径
+    output_docx      : 输出 docx 路径
+    annotations      : 批注对象列表，每项包含：
+                       element_index      元素索引（必填）
+                       element_type       元素类型："paragraph" 或 "cell"（必填）
+                       match_text         元素内匹配文本（必填）
+                       match_occurrence   同元素内第几次出现，默认 1
+                       title              批注标题
+                       content            批注正文
+    author           : 批注作者
+    document_json_path: 优化后的JSON文档路径（可选，用于获取元素信息）
     """
     input_path = Path(input_docx)
     if not input_path.exists():
         raise FileNotFoundError(f"找不到文件: {input_docx}")
+
+    # 加载文档JSON数据（如果提供）
+    doc_data = None
+    if document_json_path and Path(document_json_path).exists():
+        try:
+            with open(document_json_path, 'r', encoding='utf-8') as f:
+                doc_data = json.load(f)
+            print(f"[1/4] 加载文档结构: {Path(document_json_path).name}")
+        except Exception as e:
+            print(f"⚠️ 无法加载JSON文件: {e}，将回退到原始处理方式")
 
     with tempfile.TemporaryDirectory() as tmp:
         unpacked_dir = Path(tmp) / "unpacked"
@@ -398,74 +459,117 @@ def add_comments_from_json(
 
         doc_xml = unpacked_dir / "word" / "document.xml"
         _, _, paragraphs = _parse_paragraphs(doc_xml)
-        print(f"[2/4] 文档共 {len(paragraphs)} 个段落")
-
-        # 分析文档层级结构
-        hierarchy = _get_document_hierarchy(paragraphs)
-        print(f"      文档层级：共 {len([h for h in hierarchy if h['level'] > 0])} 个标题级别段落")
+        
+        if doc_data:
+            total_elements = len(doc_data.get("content", []))
+            print(f"[2/4] 文档共 {total_elements} 个元素（段落+单元格）")
+            
+            # 分析文档层级结构
+            hierarchy = _get_document_hierarchy(paragraphs)
+            print(f"      文档层级：共 {len([h for h in hierarchy if h['level'] > 0])} 个标题级别段落")
+        else:
+            print(f"[2/4] 文档共 {len(paragraphs)} 个段落（原始模式）")
 
         # Step 3: 逐条插入批注
         print(f"[3/4] 插入 {len(annotations)} 条批注 ...")
         success_count = 0
 
         for cid, ann in enumerate(annotations):
-            para_index = ann.get("para_index")
+            element_index = ann.get("element_index")
+            element_type = ann.get("element_type", "paragraph")
             match_text = ann.get("match_text", "")
             occurrence = ann.get("match_occurrence", 1)
             title = ann.get("title", f"Comment {cid}")
             content = ann.get("content", "")
 
             # 校验
-            if para_index is None:
-                print(f"  [SKIP] comment {cid}: 缺少 para_index")
+            if element_index is None:
+                print(f"  [SKIP] comment {cid}: 缺少 element_index")
                 continue
-            if para_index >= len(paragraphs) or para_index < 0:
-                print(f"  [SKIP] comment {cid}: para_index={para_index} 超出范围（共 {len(paragraphs)} 段）")
+            
+            if element_type not in ["paragraph", "cell"]:
+                print(f"  [SKIP] comment {cid}: element_type 必须是 'paragraph' 或 'cell'")
                 continue
+                
             if not match_text:
                 print(f"  [SKIP] comment {cid}: 缺少 match_text")
                 continue
 
-            para = paragraphs[para_index]
-            para_full_text = _para_text(para)
+            # 根据索引和类型查找目标元素
+            target_element = None
+            target_paragraph = None
+            element_info = ""
+            
+            if doc_data:
+                # 使用优化的JSON数据进行查找
+                target_element = next((e for e in doc_data.get("content", []) 
+                                     if e.get("index") == element_index and e.get("element_type") == element_type), None)
+                
+                if target_element:
+                    element_info = f"[{target_element.get('style', '其他')}]"
+                    if element_type == "cell":
+                        element_info += f" {target_element.get('table_position', 'N/A')}"
+                    else:
+                        element_info += f" 段落内容预览: {target_element.get('text', '')[:30]}"
+                
+                if not target_element:
+                    print(f"  [SKIP] comment {cid}: 找不到索引={element_index}, 类型={element_type} 的元素")
+                    continue
+                
+                # 在文档XML中找到对应的段落
+                if element_type == "paragraph":
+                    if element_index < len(paragraphs):
+                        target_paragraph = paragraphs[element_index]
+                    else:
+                        print(f"  [SKIP] comment {cid}: 段落索引超出范围")
+                        continue
+                        
+            else:
+                # 回退到原始模式
+                if element_type == "paragraph":
+                    if element_index >= len(paragraphs) or element_index < 0:
+                        print(f"  [SKIP] comment {cid}: 段落索引={element_index} 超出范围")
+                        continue
+                    target_paragraph = paragraphs[element_index]
+                    element_info = f"段落[{element_index}]"
+                else:
+                    print(f"  [SKIP] comment {cid}: 原始模式不支持单元格批注")
+                    continue
 
-            # 显示段落的层级信息
-            level_info = ""
-            for item in hierarchy:
-                if item["index"] == para_index:
-                    level_info = f"[{'标题' + str(item['level']) if item['level'] > 0 else '正文'}] {item['title']}"
-                    break
+            # 显示元素信息
+            if doc_data:
+                print(f"  [INFO] comment {cid}: {element_info}")
 
             # 定位 run（改进版）
-            target_run, found, matched_text = _locate_run_in_para(para, match_text, occurrence)
-            if not found or target_run is None:
-                # 如果精确匹配失败，尝试在相邻段落中搜索
-                print(f"  [WARN] comment {cid}: 段落[{para_index}] 中找不到 '{match_text}'，尝试在相邻段落搜索...")
-                found_in_adjacent = False
-                
-                # 在同级别的相邻段落中搜索
-                current_level = next((h["level"] for h in hierarchy if h["index"] == para_index), 0)
-                adjacent_paragraphs = [
-                    p for p in paragraphs 
-                    if any(h["index"] == paragraphs.index(p) and h["level"] == current_level for h in hierarchy)
-                ]
-                
-                for adj_para in adjacent_paragraphs:
-                    target_run, found, matched_text = _locate_run_in_para(adj_para, match_text, occurrence)
-                    if found and target_run is not None:
-                        adj_index = paragraphs.index(adj_para)
-                        para = adj_para
-                        para_full_text = _para_text(para)
-                        para_index = adj_index
-                        found_in_adjacent = True
-                        print(f"  [FOUND] comment {cid}: 在相邻段落[{adj_index}] 找到匹配")
-                        break
-                
-                if not found_in_adjacent:
-                    print(f"  [SKIP] comment {cid}: 所有段落中都找不到第{occurrence}次出现的 '{match_text}'")
-                    print(f"         目标段落[{para_index}]: '{para_full_text[:60]}'")
-                    print(f"         {level_info}")
-                    continue
+            if target_paragraph:
+                target_run, found, matched_text = _locate_run_in_para(target_paragraph, match_text, occurrence)
+                if not found or target_run is None:
+                    print(f"  [WARN] comment {cid}: 元素中找不到 '{match_text}'，尝试在相邻元素搜索...")
+                    found_in_adjacent = False
+                    
+                    if doc_data:
+                        # 在同类型的相邻元素中搜索
+                        adjacent_elements = [e for e in doc_data.get("content", []) 
+                                           if e.get("element_type") == element_type]
+                        
+                        for adj_elem in adjacent_elements:
+                            adj_index = adj_elem.get("index")
+                            if adj_index != element_index and adj_index < len(paragraphs):
+                                adj_para = paragraphs[adj_index]
+                                target_run, found, matched_text = _locate_run_in_para(adj_para, match_text, occurrence)
+                                if found and target_run is not None:
+                                    target_paragraph = adj_para
+                                    element_index = adj_index
+                                    found_in_adjacent = True
+                                    print(f"  [FOUND] comment {cid}: 在相邻元素[{adj_index}] 找到匹配")
+                                    break
+                        
+                        if not found_in_adjacent:
+                            print(f"  [SKIP] comment {cid}: 所有{element_type}中都找不到第{occurrence}次出现的 '{match_text}'")
+                            continue
+                    else:
+                        print(f"  [SKIP] comment {cid}: 原始模式中找不到匹配文本")
+                        continue
 
             # 写入 comments.xml
             comment_text = f"{title}: {content}"
@@ -481,8 +585,8 @@ def add_comments_from_json(
             ok = _inject_comment_markers(doc_xml, cid, target_run)
             if ok:
                 run_text_preview = _get_run_text(target_run)[:15]
-                level_info_text = f" ({level_info})" if level_info else ""
-                print(f"  [✓] comment {cid}: 段落[{para_index}] '{matched_text}' → run='{run_text_preview}'{level_info_text}")
+                element_text = f"{element_type}[{element_index}]"
+                print(f"  [✓] comment {cid}: {element_text} '{matched_text}' → run='{run_text_preview}'")
                 success_count += 1
             else:
                 print(f"  [✗] comment {cid}: XML 标记注入失败")
@@ -506,37 +610,53 @@ if __name__ == "__main__":
         description="根据 JSON 批注数据为 DOCX 文档精确添加批注",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-定位方式：段落索引 + 段内文本匹配，彻底避免重复内容误匹配。
+定位方式：支持段落和单元格的统一索引系统，彻底避免重复内容误匹配。
 
 使用步骤：
-  1. 先查看段落结构，确定 para_index：
-       python add_comments.py some.docx --list-paragraphs
+  1. 先查看元素结构，确定 element_index：
+        python add_comments.py some.docx --list-elements
+        python add_comments.py some.docx --list-elements --document-json my_document.json
 
   2. 编写批注 JSON（annotations.json）：
-       [
-         {
-           "para_index": 1,
-           "match_text": "工作成果",
-           "match_occurrence": 1,
-           "title": "格式问题",
-           "content": "建议使用列表展示"
-         }
-       ]
+        [
+          {
+            "element_index": 1,
+            "element_type": "paragraph",
+            "match_text": "工作成果",
+            "match_occurrence": 1,
+            "title": "格式问题",
+            "content": "建议使用列表展示"
+          },
+          {
+            "element_index": 985,
+            "element_type": "cell",
+            "match_text": "项目数据",
+            "title": "数据检查",
+            "content": "需要补充完整"
+          }
+        ]
 
   3. 执行添加：
-       python add_comments.py some.docx output.docx annotations.json --author 张三
+        python add_comments.py some.docx output.docx annotations.json --author 张三
+        python add_comments.py some.docx output.docx annotations.json --document-json my_document.json --author 张三
 """,
     )
     parser.add_argument("input_docx", help="输入 docx 文件路径")
-    parser.add_argument("output_docx", nargs="?", help="输出 docx 文件路径（--list-paragraphs 时可省略）")
+    parser.add_argument("output_docx", nargs="?", help="输出 docx 文件路径（--list-elements 时可省略）")
     parser.add_argument("annotations_json", nargs="?", help="批注 JSON 文件路径或内联 JSON 字符串")
     parser.add_argument("--author", default="Reviewer", help="批注作者姓名（默认 Reviewer）")
-    parser.add_argument("--list-paragraphs", action="store_true", help="列出文档段落结构后退出")
+    parser.add_argument("--list-paragraphs", action="store_true", help="列出文档段落结构后退出（兼容旧版本）")
+    parser.add_argument("--list-elements", action="store_true", help="列出文档元素结构后退出")
+    parser.add_argument("--document-json", help="优化后的文档JSON文件路径（用于查看完整结构）")
 
     args = parser.parse_args()
 
     if args.list_paragraphs:
         list_paragraphs(args.input_docx)
+        sys.exit(0)
+    
+    if args.list_elements:
+        list_elements(args.input_docx, args.document_json)
         sys.exit(0)
 
     if not args.output_docx or not args.annotations_json:
@@ -560,4 +680,5 @@ if __name__ == "__main__":
         output_docx=args.output_docx,
         annotations=annotations,
         author=args.author,
+        document_json_path=args.document_json,
     )
