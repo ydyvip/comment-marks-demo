@@ -69,6 +69,79 @@ def _get_run_text(run) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
+# 文档层级结构分析
+# ─────────────────────────────────────────────────────────────────
+
+def _get_document_hierarchy(paragraphs):
+    """
+    分析文档的层级结构，返回每个段落的标题级别信息
+    
+    返回：[(index, level, title, style), ...]
+    level: 0-正文, 1-标题1, 2-标题2, 3-标题3, 4-标题4, ...
+    """
+    hierarchy = []
+    STYLE_LEVEL_MAP = {
+        "Title": 1,
+        "Heading1": 1, "1": 1,
+        "Heading2": 2, "2": 2,
+        "Heading3": 3, "3": 3,
+        "Heading4": 4, "4": 4,
+        "Heading5": 5, "5": 5,
+        "Heading6": 6, "6": 6,
+    }
+    
+    for i, para in enumerate(paragraphs):
+        style = _para_style(para)
+        level = STYLE_LEVEL_MAP.get(style, 0)  # 0表示正文
+        text = _para_text(para)
+        
+        hierarchy.append({
+            "index": i,
+            "level": level,
+            "text": text,
+            "style": style,
+            "title": text[:30] if text else ""  # 标题文本前30字符
+        })
+    
+    return hierarchy
+
+def _find_paragraph_by_hierarchy(hierarchy, level=None, keyword=None, exact_level=False):
+    """
+    根据层级和关键词查找段落
+    
+    Args:
+        hierarchy: 文档层级结构
+        level: 标题级别（None表示不限制）
+        keyword: 关键词（支持模糊匹配）
+        exact_level: 是否要求精确层级匹配
+    
+    Returns: 符合条件的段落索引列表
+    """
+    matched = []
+    
+    for item in hierarchy:
+        # 检查层级
+        if level is not None:
+            if exact_level:
+                if item["level"] != level:
+                    continue
+            else:
+                if item["level"] < level:  # 找到等于或大于指定层级的段落
+                    continue
+        
+        # 检查关键词
+        if keyword:
+            text_lower = item["text"].lower()
+            keyword_lower = keyword.lower()
+            if keyword_lower not in text_lower:
+                continue
+        
+        matched.append(item["index"])
+    
+    return matched
+
+
+# ─────────────────────────────────────────────────────────────────
 # 列出段落结构（供用户配置 JSON 时参考）
 # ─────────────────────────────────────────────────────────────────
 
@@ -98,48 +171,140 @@ def list_paragraphs(docx_path: str):
 
 
 # ─────────────────────────────────────────────────────────────────
-# 核心：在指定段落内定位 match_text，找到对应的 run 元素
+# 核心：在指定段落内定位 match_text，找到对应的 run 元素（改进版）
 # ─────────────────────────────────────────────────────────────────
+
+def _normalize_text(text: str) -> str:
+    """标准化文本，用于匹配比较"""
+    import re
+    # 移除多余空格，换行符转为空格，统一为中文标点
+    normalized = re.sub(r'\s+', ' ', text.strip())
+    normalized = normalized.replace('\n', ' ')
+    # 标准化中文标点
+    normalized = normalized.replace('，', ',').replace('。', '.').replace('？', '?').replace('！', '!')
+    normalized = normalized.replace('：', ':').replace('；', ';').replace('"', '"').replace('"', '"')
+    normalized = normalized.replace(''', "'").replace(''', "'")
+    # 转换为小写进行匹配（可选）
+    # normalized = normalized.lower()
+    return normalized
 
 def _locate_run_in_para(para, match_text: str, occurrence: int = 1):
     """
     在段落内找第 occurrence 次出现 match_text 的位置，返回对应的 run 元素。
+    完全重写版：确保精确的文本匹配和run定位。
 
     策略：
-    1. 先拼出段落全文，找到 match_text 在段落内的字符偏移（第 occurrence 次）
-    2. 遍历 run，累计字符数，找到覆盖该偏移的 run
+    1. 直接匹配段落中的run文本
+    2. 支持跨run的文本匹配
+    3. 确保定位的精确性
 
-    返回 (run_elem, found) 或 (None, False)
+    返回 (run_elem, found, matched_text) 或 (None, False, None)
     """
+    import re
+    
+    # 获取段落所有run
     runs = para.findall(f".//{{{W}}}r")
-    full_text = ""
-    run_spans = []  # (start, end, run_elem)
-
+    if not runs:
+        return None, False, None
+    
+    # 构建run文本映射
+    run_texts = []
     for run in runs:
         t = run.find(f"{{{W}}}t")
-        text = (t.text or "") if t is not None else ""
-        start = len(full_text)
-        full_text += text
-        if text:
-            run_spans.append((start, len(full_text), run))
-
-    # 找第 occurrence 次出现
-    pos = -1
-    count = 0
+        if t is not None and t.text:
+            run_texts.append(t.text.strip())
+        else:
+            run_texts.append("")
+    
+    # 拼接完整段落文本
+    full_text = "".join(run_texts)
+    
+    # 如果匹配文本为空，返回第一个非空run
+    if not match_text.strip():
+        for run in runs:
+            t = run.find(f"{{{W}}}t")
+            if t is not None and t.text and t.text.strip():
+                return run, True, t.text.strip()
+        return None, False, None
+    
+    # 标准化文本（不转换为小写，保持原样）
+    def normalize_simple(text):
+        import re
+        # 移除多余空格，换行符转为空格
+        normalized = re.sub(r'\s+', ' ', text.strip())
+        normalized = normalized.replace('\n', ' ')
+        return normalized
+    
+    normalized_match = normalize_simple(match_text)
+    normalized_full = normalize_simple(full_text)
+    
+    # 查找匹配位置
+    match_positions = []
     search_from = 0
-    while count < occurrence:
-        pos = full_text.find(match_text, search_from)
+    
+    while True:
+        pos = normalized_full.find(normalized_match, search_from)
         if pos == -1:
-            return None, False
-        count += 1
+            break
+        match_positions.append(pos)
         search_from = pos + 1
-
-    # 找覆盖 pos 的 run
-    for start, end, run in run_spans:
-        if start <= pos < end:
-            return run, True
-
-    return None, False
+    
+    # 检查是否找到指定次数的匹配
+    if len(match_positions) < occurrence:
+        return None, False, None
+    
+    target_pos = match_positions[occurrence - 1]
+    
+    # 找到覆盖目标位置的run
+    current_pos = 0
+    for i, run_text in enumerate(run_texts):
+        if not run_text:
+            continue
+        
+        run_start = current_pos
+        run_end = current_pos + len(run_text)
+        
+        # 检查目标位置是否在这个run中
+        if run_start <= target_pos < run_end:
+            target_run = runs[i]
+            matched_text = normalized_match
+            return target_run, True, matched_text
+        
+        current_pos = run_end
+    
+    # 如果跨多个run，返回第一个包含匹配文本开头的run
+    if target_pos < len(full_text):
+        for i, run_text in enumerate(run_texts):
+            if not run_text:
+                continue
+            
+            run_start = current_pos
+            run_end = current_pos + len(run_text)
+            
+            # 如果匹配文本跨多个run，返回第一个run
+            if run_start <= target_pos < run_end:
+                target_run = runs[i]
+                matched_text = normalized_match
+                return target_run, True, matched_text
+            
+            current_pos = run_end
+    
+    # 最后的备选方案：找到包含匹配文本的最长run
+    best_run = None
+    best_length = 0
+    
+    for i, run in enumerate(runs):
+        t = run.find(f"{{{W}}}t")
+        if t is not None and t.text:
+            run_text = t.text.strip()
+            if normalized_match in run_text and len(run_text) > best_length:
+                best_run = run
+                best_length = len(run_text)
+    
+    if best_run:
+        return best_run, True, normalized_match
+    
+    return None, False, None
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -235,6 +400,10 @@ def add_comments_from_json(
         _, _, paragraphs = _parse_paragraphs(doc_xml)
         print(f"[2/4] 文档共 {len(paragraphs)} 个段落")
 
+        # 分析文档层级结构
+        hierarchy = _get_document_hierarchy(paragraphs)
+        print(f"      文档层级：共 {len([h for h in hierarchy if h['level'] > 0])} 个标题级别段落")
+
         # Step 3: 逐条插入批注
         print(f"[3/4] 插入 {len(annotations)} 条批注 ...")
         success_count = 0
@@ -260,12 +429,43 @@ def add_comments_from_json(
             para = paragraphs[para_index]
             para_full_text = _para_text(para)
 
-            # 定位 run
-            target_run, found = _locate_run_in_para(para, match_text, occurrence)
+            # 显示段落的层级信息
+            level_info = ""
+            for item in hierarchy:
+                if item["index"] == para_index:
+                    level_info = f"[{'标题' + str(item['level']) if item['level'] > 0 else '正文'}] {item['title']}"
+                    break
+
+            # 定位 run（改进版）
+            target_run, found, matched_text = _locate_run_in_para(para, match_text, occurrence)
             if not found or target_run is None:
-                print(f"  [SKIP] comment {cid}: 段落[{para_index}] 中找不到第{occurrence}次出现的 '{match_text}'")
-                print(f"         段落全文: '{para_full_text[:60]}'")
-                continue
+                # 如果精确匹配失败，尝试在相邻段落中搜索
+                print(f"  [WARN] comment {cid}: 段落[{para_index}] 中找不到 '{match_text}'，尝试在相邻段落搜索...")
+                found_in_adjacent = False
+                
+                # 在同级别的相邻段落中搜索
+                current_level = next((h["level"] for h in hierarchy if h["index"] == para_index), 0)
+                adjacent_paragraphs = [
+                    p for p in paragraphs 
+                    if any(h["index"] == paragraphs.index(p) and h["level"] == current_level for h in hierarchy)
+                ]
+                
+                for adj_para in adjacent_paragraphs:
+                    target_run, found, matched_text = _locate_run_in_para(adj_para, match_text, occurrence)
+                    if found and target_run is not None:
+                        adj_index = paragraphs.index(adj_para)
+                        para = adj_para
+                        para_full_text = _para_text(para)
+                        para_index = adj_index
+                        found_in_adjacent = True
+                        print(f"  [FOUND] comment {cid}: 在相邻段落[{adj_index}] 找到匹配")
+                        break
+                
+                if not found_in_adjacent:
+                    print(f"  [SKIP] comment {cid}: 所有段落中都找不到第{occurrence}次出现的 '{match_text}'")
+                    print(f"         目标段落[{para_index}]: '{para_full_text[:60]}'")
+                    print(f"         {level_info}")
+                    continue
 
             # 写入 comments.xml
             comment_text = f"{title}: {content}"
@@ -281,7 +481,8 @@ def add_comments_from_json(
             ok = _inject_comment_markers(doc_xml, cid, target_run)
             if ok:
                 run_text_preview = _get_run_text(target_run)[:15]
-                print(f"  [✓] comment {cid}: 段落[{para_index}] 第{occurrence}次 '{match_text}' → run='{run_text_preview}'")
+                level_info_text = f" ({level_info})" if level_info else ""
+                print(f"  [✓] comment {cid}: 段落[{para_index}] '{matched_text}' → run='{run_text_preview}'{level_info_text}")
                 success_count += 1
             else:
                 print(f"  [✗] comment {cid}: XML 标记注入失败")
