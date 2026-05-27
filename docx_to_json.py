@@ -57,8 +57,8 @@ def extract_document_content(docx_path: str, output_path: str = None):
             "index": i,
             "element_type": "paragraph",
             "text": paragraph.text.strip() if paragraph.text else "",
-            "style": style_mapping.get(paragraph.style.name, '其他'),
-            "style_name": paragraph.style.name,
+            "style": style_mapping.get(paragraph.style.name, '其他') if paragraph.style else '其他',
+            "style_name": paragraph.style.name if paragraph.style else '',
             "text_length": len(paragraph.text) if paragraph.text else 0
         }
         
@@ -286,107 +286,6 @@ def main():
             print(f"❌ 导出失败: {e}")
     else:
         print("❌ 参数错误。使用 --summary 获取帮助信息")
-
-
-# ─────────────────────────────────────────────────────────────────
-# 便利函数：计算派生属性（向后兼容）
-# ─────────────────────────────────────────────────────────────────
-
-def calculate_derived_properties(element):
-    """
-    计算元素的派生属性（向后兼容）
-    
-    Args:
-        element: 内容元素（段落或单元格）
-    
-    Returns:
-        dict: 包含派生属性的字典
-    """
-    derived = {}
-    
-    # 基本属性
-    text = element.get("text", "")
-    has_text = bool(text.strip())
-    text_length = len(text)
-    
-    # 派生属性
-    derived["has_text"] = has_text
-    derived["text_length"] = text_length
-    derived["is_empty"] = not has_text
-    
-    if has_text:
-        derived["content_type"] = "内容段落" if element.get("element_type") == "paragraph" else "内容单元格"
-        derived["word_count"] = len(text.split())
-    else:
-        derived["content_type"] = "空段落" if element.get("element_type") == "paragraph" else "空单元格"
-        derived["word_count"] = 0
-    
-    return derived
-
-
-def get_element_by_index(document_data, index):
-    """
-    根据索引获取元素
-    
-    Args:
-        document_data: 完整的文档数据
-        index: 元素索引
-    
-    Returns:
-        dict: 元素数据或None
-    """
-    for element in document_data.get("content", []):
-        if element.get("index") == index:
-            return element
-    return None
-
-
-def find_elements_by_text(document_data, search_text, element_type=None):
-    """
-    根据文本搜索元素
-    
-    Args:
-        document_data: 完整的文档数据
-        search_text: 搜索文本
-        element_type: 元素类型（"paragraph" 或 "cell"），可选
-    
-    Returns:
-        list: 匹配的元素列表
-    """
-    results = []
-    for element in document_data.get("content", []):
-        if element_type and element.get("element_type") != element_type:
-            continue
-        
-        if search_text in element.get("text", ""):
-            results.append(element)
-    
-    return results
-
-
-def get_document_stats(document_data):
-    """
-    获取文档统计信息
-    
-    Args:
-        document_data: 完整的文档数据
-    
-    Returns:
-        dict: 统计信息
-    """
-    content = document_data.get("content", [])
-    
-    stats = {
-        "total_elements": len(content),
-        "paragraphs": len([e for e in content if e.get("element_type") == "paragraph"]),
-        "cells": len([e for e in content if e.get("element_type") == "cell"]),
-        "total_characters": sum(len(e.get("text", "")) for e in content),
-        "total_words": sum(len(e.get("text", "").split()) for e in content if e.get("text")),
-        "non_empty_elements": len([e for e in content if e.get("text")]),
-        "empty_elements": len([e for e in content if not e.get("text")])
-    }
-    
-    return stats
 
 
 if __name__ == "__main__":

@@ -38,6 +38,11 @@ sys.path.insert(0, str(Path(__file__).parent / "scripts" / "office"))
 from comment import add_comment
 from office.pack import pack
 from office.unpack import unpack
+from utils import (
+    extract_paragraph_text, normalize_text, extract_paragraph_style,
+    parse_paragraphs_from_document_xml, resolve_element_to_paragraph,
+    locate_text_in_paragraph, validate_annotation_target
+)
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -239,120 +244,12 @@ def _normalize_text(text: str) -> str:
 def _locate_run_in_para(para, match_text: str, occurrence: int = 1):
     """
     在段落内找第 occurrence 次出现 match_text 的位置，返回对应的 run 元素。
-    完全重写版：确保精确的文本匹配和run定位。
-
-    策略：
-    1. 直接匹配段落中的run文本
-    2. 支持跨run的文本匹配
-    3. 确保定位的精确性
-
+    
+    使用 utils.py 中的统一实现，确保与 docx_to_json.py 的文本提取逻辑一致。
+    
     返回 (run_elem, found, matched_text) 或 (None, False, None)
     """
-    import re
-    
-    # 获取段落所有run
-    runs = para.findall(f".//{{{W}}}r")
-    if not runs:
-        return None, False, None
-    
-    # 构建run文本映射
-    run_texts = []
-    for run in runs:
-        t = run.find(f"{{{W}}}t")
-        if t is not None and t.text:
-            run_texts.append(t.text.strip())
-        else:
-            run_texts.append("")
-    
-    # 拼接完整段落文本
-    full_text = "".join(run_texts)
-    
-    # 如果匹配文本为空，返回第一个非空run
-    if not match_text.strip():
-        for run in runs:
-            t = run.find(f"{{{W}}}t")
-            if t is not None and t.text and t.text.strip():
-                return run, True, t.text.strip()
-        return None, False, None
-    
-    # 标准化文本（不转换为小写，保持原样）
-    def normalize_simple(text):
-        import re
-        # 移除多余空格，换行符转为空格
-        normalized = re.sub(r'\s+', ' ', text.strip())
-        normalized = normalized.replace('\n', ' ')
-        return normalized
-    
-    normalized_match = normalize_simple(match_text)
-    normalized_full = normalize_simple(full_text)
-    
-    # 查找匹配位置
-    match_positions = []
-    search_from = 0
-    
-    while True:
-        pos = normalized_full.find(normalized_match, search_from)
-        if pos == -1:
-            break
-        match_positions.append(pos)
-        search_from = pos + 1
-    
-    # 检查是否找到指定次数的匹配
-    if len(match_positions) < occurrence:
-        return None, False, None
-    
-    target_pos = match_positions[occurrence - 1]
-    
-    # 找到覆盖目标位置的run
-    current_pos = 0
-    for i, run_text in enumerate(run_texts):
-        if not run_text:
-            continue
-        
-        run_start = current_pos
-        run_end = current_pos + len(run_text)
-        
-        # 检查目标位置是否在这个run中
-        if run_start <= target_pos < run_end:
-            target_run = runs[i]
-            matched_text = normalized_match
-            return target_run, True, matched_text
-        
-        current_pos = run_end
-    
-    # 如果跨多个run，返回第一个包含匹配文本开头的run
-    if target_pos < len(full_text):
-        for i, run_text in enumerate(run_texts):
-            if not run_text:
-                continue
-            
-            run_start = current_pos
-            run_end = current_pos + len(run_text)
-            
-            # 如果匹配文本跨多个run，返回第一个run
-            if run_start <= target_pos < run_end:
-                target_run = runs[i]
-                matched_text = normalized_match
-                return target_run, True, matched_text
-            
-            current_pos = run_end
-    
-    # 最后的备选方案：找到包含匹配文本的最长run
-    best_run = None
-    best_length = 0
-    
-    for i, run in enumerate(runs):
-        t = run.find(f"{{{W}}}t")
-        if t is not None and t.text:
-            run_text = t.text.strip()
-            if normalized_match in run_text and len(run_text) > best_length:
-                best_run = run
-                best_length = len(run_text)
-    
-    if best_run:
-        return best_run, True, normalized_match
-    
-    return None, False, None
+    return locate_text_in_paragraph(para, match_text, occurrence)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -398,6 +295,7 @@ def _inject_comment_markers(doc_xml_path: Path, comment_id: int, target_run) -> 
         f'<w:commentReference w:id="{comment_id}"/></w:r>'
     )
 
+    # 确保XML格式正确
     xml_text = (
         xml_text[:run_start]
         + start_tag
@@ -464,6 +362,11 @@ def add_comments_from_json(
             total_elements = len(doc_data.get("content", []))
             print(f"[2/4] 文档共 {total_elements} 个元素（段落+单元格）")
             
+            # 创建元素映射
+            from utils import create_element_mapping
+            element_mapping = create_element_mapping(paragraphs, doc_data)
+            print(f"      元素映射：共 {len(element_mapping)} 个可映射元素")
+            
             # 分析文档层级结构
             hierarchy = _get_document_hierarchy(paragraphs)
             print(f"      文档层级：共 {len([h for h in hierarchy if h['level'] > 0])} 个标题级别段落")
@@ -496,34 +399,45 @@ def add_comments_from_json(
                 continue
 
             # 根据索引和类型查找目标元素
-            target_element = None
             target_paragraph = None
+            target_element_info = ""
             element_info = ""
             
             if doc_data:
-                # 使用优化的JSON数据进行查找
-                target_element = next((e for e in doc_data.get("content", []) 
-                                     if e.get("index") == element_index and e.get("element_type") == element_type), None)
+                # 使用映射关系查找元素
+                from utils import find_element_by_mapping
+                target_paragraph, target_element_info = find_element_by_mapping(
+                    element_mapping, element_index, element_type
+                )
                 
-                if target_element:
-                    element_info = f"[{target_element.get('style', '其他')}]"
+                if target_paragraph and target_element_info:
+                    element_info = f"[{target_element_info.get('style', '其他')}]"
                     if element_type == "cell":
-                        element_info += f" {target_element.get('table_position', 'N/A')}"
+                        element_info += f" {target_element_info.get('table_position', 'N/A')}"
+                        element_info += f" 段落内容预览: {extract_paragraph_text(target_paragraph)[:30]}"
                     else:
-                        element_info += f" 段落内容预览: {target_element.get('text', '')[:30]}"
-                
-                if not target_element:
-                    print(f"  [SKIP] comment {cid}: 找不到索引={element_index}, 类型={element_type} 的元素")
-                    continue
-                
-                # 在文档XML中找到对应的段落
-                if element_type == "paragraph":
-                    if element_index < len(paragraphs):
-                        target_paragraph = paragraphs[element_index]
-                    else:
-                        print(f"  [SKIP] comment {cid}: 段落索引超出范围")
-                        continue
+                        element_info += f" 段落内容预览: {target_element_info.get('text', '')[:30]}"
+                    
+                    # 显示元素信息
+                    print(f"  [INFO] comment {cid}: {element_info}")
+                else:
+                    # 如果直接映射失败，尝试使用原来的方法
+                    target_paragraph, target_element_info = resolve_element_to_paragraph(
+                        paragraphs, doc_data, element_index, element_type
+                    )
+                    
+                    if target_paragraph and target_element_info:
+                        element_info = f"[{target_element_info.get('style', '其他')}]"
+                        if element_type == "cell":
+                            element_info += f" {target_element_info.get('table_position', 'N/A')}"
+                            element_info += f" 段落内容预览: {extract_paragraph_text(target_paragraph)[:30]}"
+                        else:
+                            element_info += f" 段落内容预览: {target_element_info.get('text', '')[:30]}"
                         
+                        print(f"  [INFO] comment {cid}: {element_info}")
+                    else:
+                        print(f"  [SKIP] comment {cid}: 无法解析索引={element_index}, 类型={element_type} 的元素")
+                        continue
             else:
                 # 回退到原始模式
                 if element_type == "paragraph":
@@ -532,6 +446,7 @@ def add_comments_from_json(
                         continue
                     target_paragraph = paragraphs[element_index]
                     element_info = f"段落[{element_index}]"
+                    print(f"  [INFO] comment {cid}: {element_info}")
                 else:
                     print(f"  [SKIP] comment {cid}: 原始模式不支持单元格批注")
                     continue
@@ -540,7 +455,7 @@ def add_comments_from_json(
             if doc_data:
                 print(f"  [INFO] comment {cid}: {element_info}")
 
-            # 定位 run（改进版）
+            # 定位 run（使用统一逻辑）
             if target_paragraph:
                 target_run, found, matched_text = _locate_run_in_para(target_paragraph, match_text, occurrence)
                 if not found or target_run is None:
@@ -554,18 +469,41 @@ def add_comments_from_json(
                         
                         for adj_elem in adjacent_elements:
                             adj_index = adj_elem.get("index")
-                            if adj_index != element_index and adj_index < len(paragraphs):
-                                adj_para = paragraphs[adj_index]
-                                target_run, found, matched_text = _locate_run_in_para(adj_para, match_text, occurrence)
-                                if found and target_run is not None:
-                                    target_paragraph = adj_para
-                                    element_index = adj_index
-                                    found_in_adjacent = True
-                                    print(f"  [FOUND] comment {cid}: 在相邻元素[{adj_index}] 找到匹配")
-                                    break
+                            if adj_index != element_index:
+                                # 使用映射关系查找相邻元素
+                                adj_para, adj_element_info = find_element_by_mapping(
+                                    element_mapping, adj_index, element_type
+                                )
+                                
+                                if not adj_para:
+                                    # 如果映射找不到，尝试原来的方法
+                                    adj_para, adj_element_info = resolve_element_to_paragraph(
+                                        paragraphs, doc_data, adj_index, element_type
+                                    )
+                                
+                                if adj_para:
+                                    target_run, found, matched_text = _locate_run_in_para(adj_para, match_text, occurrence)
+                                    if found and target_run is not None:
+                                        target_paragraph = adj_para
+                                        element_index = adj_index
+                                        target_element_info = adj_element_info or adj_elem
+                                        found_in_adjacent = True
+                                        element_info = f"[{adj_element_info.get('style', '其他') if adj_element_info else adj_elem.get('style', '其他')}]"
+                                        if element_type == "cell":
+                                            element_info += f" {adj_element_info.get('table_position', 'N/A') if adj_element_info else adj_elem.get('table_position', 'N/A')}"
+                                        else:
+                                            element_info += f" 段落内容预览: {extract_paragraph_text(adj_para)[:30]}"
+                                        print(f"  [FOUND] comment {cid}: 在相邻元素[{adj_index}] 找到匹配")
+                                        break
                         
                         if not found_in_adjacent:
-                            print(f"  [SKIP] comment {cid}: 所有{element_type}中都找不到第{occurrence}次出现的 '{match_text}'")
+                            # 使用验证函数检查匹配文本是否存在
+                            validation = validate_annotation_target(doc_data, element_index, element_type, match_text)
+                            if not validation["valid"]:
+                                print(f"  [SKIP] comment {cid}: {validation['error']}")
+                                print(f"        元素内容: {validation.get('element_text', 'N/A')}")
+                            else:
+                                print(f"  [SKIP] comment {cid}: 所有{element_type}中都找不到第{occurrence}次出现的 '{match_text}'")
                             continue
                     else:
                         print(f"  [SKIP] comment {cid}: 原始模式中找不到匹配文本")

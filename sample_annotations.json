@@ -1,38 +1,23 @@
 [
   {
-    "para_index": 283,
-    "match_text": "智能体构建与管理模块支持智能体创建",
+    "element_index": 1163,
+    "element_type": "paragraph",
+    "match_text": "支持外部系统数据的接收与业务协同，包括数据管理中心和数字档案中心，为总体单位协同设计平台提供标准接口，实现跨平台能力调用。",
     "title": "标题格式",
     "content": "文档标题建议使用更正式的命名，例如加上年份和季度信息。"
   },
   {
-    "para_index": 1,
-    "match_text": "产品研发",
+    "element_index": 2022,
+    "element_type": "cell",
+    "match_text": "元素名称",
     "title": "内容补充",
     "content": "建议此处列举产品研发的具体成果数据，增强说服力。"
   },
   {
-    "para_index": 1,
-    "match_text": "成本控制",
+    "element_index": 3039,
+    "element_type": "paragraph",
+    "match_text": "SJJXTJC_RWS_SJYJ",
     "title": "问题说明",
     "content": "成本控制问题需在后文详细展开，建议增加专项章节。"
-  },
-  {
-    "para_index": 3,
-    "match_text": "82 分",
-    "title": "数据核实",
-    "content": "请确认上季度满意度数据来源，与财务报告数字保持一致。"
-  },
-  {
-    "para_index": 5,
-    "match_text": "跨部门协作",
-    "title": "改进建议",
-    "content": "跨部门协作可引入 OKR 工具，建议参考第三季度试点经验。"
-  },
-  {
-    "para_index": 7,
-    "match_text": "AI 辅助功能",
-    "title": "风险提示",
-    "content": "AI 模块上线前需完成安全评审，请在计划中注明评审节点。"
   }
 ]
