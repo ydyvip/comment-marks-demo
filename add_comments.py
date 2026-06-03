@@ -4,8 +4,8 @@ add_comments.py - 为 DOCX 文档批量添加批注
 基于 docx-comments 库，支持精准文本锚定批注。
 
 支持两种批注目标：
-1. 段落（默认）：通过 match_text 在全文段落中搜索匹配
-2. 单元格（target_type="cell"）：通过 table_index/row_index/col_index 定位单元格
+    1. 段落（默认）：通过 match_text 在全文段落中搜索匹配
+    2. 单元格（target_type="cell"）：通过 table_index 定位表格，在表格内搜索匹配
 
 批注 JSON 格式：
 
@@ -19,23 +19,15 @@ add_comments.py - 为 DOCX 文档批量添加批注
   }
 ]
 
-单元格模式：
+单元格模式（通过 table_index 定位表格，在表格内搜索匹配；不指定则遍历所有表格）：
 [
   {
     "match_text": "协同消息反馈",
     "target_type": "cell",
-    "table_index": 0,            # 可选，表格索引（从 0 开始）
-    "row_index": 1,              # 可选，行索引（从 0 开始）
-    "col_index": 1,              # 可选，列索引（从 0 开始）
+    "table_index": 0,            # 可选，表格索引（从 0 开始），不指定则遍历所有表格
     "match_occurrence": 1,       # 可选，第几次出现，默认 1
     "title": "内容检查",
     "content": "请确认此功能描述是否完整。"
-  },
-  {
-    "match_text": "协同消息反馈",
-    "target_type": "cell",
-    "title": "通配模式",
-    "content": "自动搜索整个文档找到第一个匹配的单元格"
   }
 ]
 
@@ -130,44 +122,9 @@ def _find_text_runs(paragraph, match_text: str):
     return start_run_idx, end_run_idx
 
 
-def _find_cell(doc: Document, table_index: int, row_index: int, col_index: int):
-    """
-    根据索引查找表格中的单元格。
-    返回 (table, cell) 或 (None, None)。
-    """
-    if table_index < 0 or table_index >= len(doc.tables):
-        return None, None
-    table = doc.tables[table_index]
-    if row_index < 0 or row_index >= len(table.rows):
-        return None, None
-    row = table.rows[row_index]
-    if col_index < 0 or col_index >= len(row.cells):
-        return None, None
-    return table, row.cells[col_index]
-
-
 def _get_cell_text(cell) -> str:
     """获取单元格内所有段落拼接的文本"""
     return "\n".join(p.text for p in cell.paragraphs)
-
-
-def _find_cell_by_text(doc: Document, match_text: str, occurrence: int = 1):
-    """
-    遍历文档所有表格的所有单元格，查找包含 match_text 的单元格。
-    返回 (table_index, row_index, col_index, cell) 或 None。
-
-    occurrence 参数控制第几次出现。
-    """
-    found_count = 0
-    for t_idx, table in enumerate(doc.tables):
-        for r_idx, row in enumerate(table.rows):
-            for c_idx, cell in enumerate(row.cells):
-                cell_text = _get_cell_text(cell)
-                if match_text in cell_text:
-                    found_count += 1
-                    if found_count == occurrence:
-                        return t_idx, r_idx, c_idx, cell
-    return None
 
 
 def _find_text_runs_in_cell(cell, match_text: str, occurrence: int = 1):
@@ -297,8 +254,15 @@ def list_paragraphs(docx_path: str):
 
     STYLE_LABEL = {
         "Title": "标题",
-        "Heading1": "标题1", "Heading2": "标题2", "Heading3": "标题3",
-        "Heading4": "标题4", "Heading5": "标题5", "Heading6": "标题6",
+        "Heading1": "标题1",
+        "Heading2": "标题2",
+        "Heading3": "标题3",
+        "Heading4": "标题4",
+        "Heading5": "标题5",
+        "Heading6": "标题6",
+        "Heading7": "标题7",
+        "Heading8": "标题8",
+        "Heading9": "标题9",
         "Normal": "正文",
     }
 
@@ -309,7 +273,8 @@ def list_paragraphs(docx_path: str):
     for i, para in enumerate(doc.paragraphs):
         style = para.style.name if para.style else ""
         label = STYLE_LABEL.get(style, style if style else "正文")
-        text = para.text[:60] + "..." if len(para.text) > 60 else para.text
+        # text = para.text[:60] + "..." if len(para.text) > 60 else para.text
+        text = para.text
         print(f"  {i:>4}  {label:<12}  {text}")
 
     print(f"\n💡 使用 --list-paragraphs 查看段落，配合 --author 参数添加批注")
@@ -320,23 +285,23 @@ def list_tables(docx_path: str):
     doc = Document(docx_path)
 
     print(f"\n📄 表格列表（共 {len(doc.tables)} 个）：")
-    print(f"{'索引':>5}  {'行数':>5}  {'列数':>5}  {'内容（前80字）'}")
+    print(f"{'索引':>5}  {'行数':>5}  {'列数':>5}")
     print("─" * 80)
 
     for i, table in enumerate(doc.tables):
         rows = len(table.rows)
         cols = len(table.columns)
-        # 取前3行展示
         lines = []
         for j, row in enumerate(table.rows):
-            if j >= 3:
-                break
-            cells_text = " | ".join(cell.text[:20] for cell in row.cells if cell.text)
+            # if j >= 3:
+            #     break
+            # cells_text = " | ".join(cell.text[:20] for cell in row.cells if cell.text)
+            cells_text = " | ".join(cell.text for cell in row.cells)
             lines.append(cells_text)
         text = "\n".join(lines)
-        if len(text) > 120:
-            text = text[:120] + "..."
-        print(f"  {i:>4}  {rows:>4}  {cols:>4}  {text}")
+        # if len(text) > 120:
+        #     text = text[:120] + "..."
+        print(f"\n\nTABLE_INDEX: {i:>4} ROW_INDEX: {rows:>4} COL_INDEX: {cols:>4} \n{text}")
 
     print(f"\n💡 使用 --list-tables 查看表格，配合 target_type=\"cell\" 在 JSON 中添加单元格批注")
 
@@ -352,7 +317,7 @@ def add_comments_from_json(
 
     支持两种批注目标：
     1. 段落（默认）：通过 match_text 在段落中搜索
-    2. 单元格（target_type="cell"）：通过 table_index/row_index/col_index 定位
+2. 单元格（target_type="cell"）：通过 table_index 定位表格，在表格内搜索匹配文本
 
     参数
     ----
@@ -400,55 +365,42 @@ def add_comments_from_json(
 
         try:
             if target_type == "cell":
-                # 单元格批注模式
-                table_index = ann.get("table_index", -1)
-                row_index = ann.get("row_index", -1)
-                col_index = ann.get("col_index", -1)
-
-                if table_index < 0 or row_index < 0 or col_index < 0:
-                    # 通配模式：不指定索引，自动在全文档所有单元格中搜索
-                    result = _find_cell_by_text(doc, match_text, occurrence)
-                    if result is None:
-                        print(f"  [SKIP] comment {cid}: 全文档单元格中找不到 '{match_text}'")
+                # 单元格批注模式：通过 table_index 定位表格，在表格内搜索匹配；未指定则遍历所有表格
+                table_index = ann.get("table_index")
+                if table_index is not None:
+                    if table_index < 0 or table_index >= len(doc.tables):
+                        print(f"  [SKIP] comment {cid}: table_index={table_index} 超出范围（文档共 {len(doc.tables)} 个表格）")
                         continue
-                    table_index, row_index, col_index, cell = result
-                    cell_text = _get_cell_text(cell)[:50]
-                    print(f"  [✓] comment {cid}: cell[{table_index},{row_index},{col_index}] (通配匹配) '{match_text}' → {author}")
-                    success_count += 1
-                    continue
+                    tables_to_search = [table_index]
+                else:
+                    tables_to_search = range(len(doc.tables))
 
-                # 精确索引模式：先尝试精确查找
-                table, cell = _find_cell(doc, table_index, row_index, col_index)
-                if cell is None:
-                    # 精确索引失败，自动降级为通配搜索
-                    result = _find_cell_by_text(doc, match_text, occurrence)
-                    if result is None:
-                        print(f"  [SKIP] comment {cid}: 找不到单元格 [table={table_index}, row={row_index}, col={col_index}]，且全文档单元格中也不含 '{match_text}'")
-                        continue
-                    found_ti, found_ri, found_ci, cell = result
-                    cell_text = _get_cell_text(cell)[:80]
-                    print(f"  [!] comment {cid}: 索引 [{table_index},{row_index},{col_index}] 超出范围，自动降级为通配匹配 → cell[{found_ti},{found_ri},{found_ci}] '{match_text}' → {author}")
-                    success_count += 1
-                    continue
-
-                # 在单元格中定位文本
-                anchor_para, start_run, end_run = _find_text_runs_in_cell(cell, match_text, occurrence)
-                if anchor_para is None:
-                    cell_text = _get_cell_text(cell)[:80]
-                    print(f"  [SKIP] comment {cid}: 在单元格 [table={table_index}, row={row_index}, col={col_index}] 中找不到 '{match_text}' (内容: '{cell_text}...')")
-                    continue
-
-                comment_id = mgr.add_comment(
-                    paragraph=anchor_para,
-                    start_run=start_run,
-                    end_run=end_run,
-                    text=comment_text,
-                    author=person,
-                    initials=initials,
-                )
-                cell_text = _get_cell_text(cell)[:50]
-                print(f"  [✓] comment {cid}: cell[{table_index},{row_index},{col_index}] '{match_text}' → {author}")
-                success_count += 1
+                matched_count = 0
+                for t_idx in tables_to_search:
+                    table = doc.tables[t_idx]
+                    for r_idx, row in enumerate(table.rows):
+                        for c_idx, cell in enumerate(row.cells):
+                            cell_text = _get_cell_text(cell)
+                            if match_text in cell_text:
+                                anchor_para, start_run, end_run = _find_text_runs_in_cell(cell, match_text, occurrence)
+                                if anchor_para is None:
+                                    continue
+                                comment_id = mgr.add_comment(
+                                    paragraph=anchor_para,
+                                    start_run=start_run,
+                                    end_run=end_run,
+                                    text=comment_text,
+                                    author=person,
+                                    initials=initials,
+                                )
+                                matched_count += 1
+                                print(f"  [✓] comment {cid}: table[{t_idx}], row[{r_idx}], col[{c_idx}] '{match_text}' → {author}")
+                success_count += matched_count
+                if matched_count == 0:
+                    if table_index is not None:
+                        print(f"  [SKIP] comment {cid}: 在 table[{table_index}] 中找不到 '{match_text}'")
+                    else:
+                        print(f"  [SKIP] comment {cid}: 所有表格中找不到 '{match_text}'")
 
             else:
                 # 段落批注模式（原有逻辑）
@@ -522,7 +474,7 @@ def main():
 
   # 添加单元格批注（从 JSON 文件）
   python add_comments.py document.docx output.docx annotations.json --author 张三
-  # JSON 中需指定 target_type="cell", table_index, row_index, col_index
+   # JSON 中需指定 target_type="cell" 和 table_index，在指定表格内搜索匹配
 """,
     )
     parser.add_argument("input_docx", help="输入 docx 文件路径")

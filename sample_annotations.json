@@ -1,24 +1,19 @@
 [
   {
-    "match_text": "支持外部系统数据的接收与业务协同，包括数据管理中心和数字档案中心，为总体单位协同设计平台提供标准接口，实现跨平台能力调用。",
+    "match_text": "输入/输出数据项",
     "title": "标题格式",
     "content": "文档标题建议使用更正式的命名，例如加上年份和季度信息。"
   },
   {
-    "match_text": "元素名称",
+    "match_text": "单击打开编辑任务弹框对任务进行编辑",
     "target_type": "cell",
-    "table_index": 8,
-    "row_index": 0,
-    "col_index": 0,
     "title": "内容补充",
     "content": "建议此处列举产品研发的具体成果数据，增强说服力。"
   },
   {
-    "match_text": "SJJXTJC_RWS_SJYJ",
+    "match_text": "管理员可删除消息列表中的消息，",
     "target_type": "cell",
-    "table_index": 83,
-    "row_index": 1,
-    "col_index": 2,
+    "table_index": 106,
     "title": "问题说明",
     "content": "成本控制问题需在后文详细展开，建议增加专项章节。"
   }

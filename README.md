@@ -8,7 +8,7 @@
 - **Word Online 兼容**：完整支持 OOXML 评论规范（含 `commentsExtended.xml` 线程和 `commentsIds.xml` 持久化）
 - **人员身份管理**：自动维护 `people.xml`，确保批注作者正确显示
 - **段落批注**：通过匹配文本在全文段落中搜索定位
-- **单元格批注**：通过 `table_index`/`row_index`/`col_index` 精确定位表格单元格并添加批注
+- **单元格批注**：通过 `table_index` 精确定位表格单元格并添加批注
 
 ## 安装
 
@@ -56,8 +56,6 @@ python add_comments.py sample.docx --list-tables
     "match_text": "协同消息反馈",
     "target_type": "cell",
     "table_index": 0,
-    "row_index": 1,
-    "col_index": 1,
     "match_occurrence": 1,
     "title": "内容检查",
     "content": "请确认此功能描述是否完整。"
@@ -94,13 +92,11 @@ python add_comments.py sample.docx output.docx cell_annotations.json --author �
 | `match_text` | string | 在单元格内匹配的文本片段 |
 | `target_type` | string | 必须为 `"cell"` |
 | `table_index` | int | 可选，表格索引，从 0 开始（不指定则通配全文档搜索） |
-| `row_index` | int | 可选，行索引，从 0 开始（不指定则通配全文档搜索） |
-| `col_index` | int | 可选，列索引，从 0 开始（不指定则通配全文档搜索） |
 | `match_occurrence` | int | 可选，第几次出现，默认 1 |
 | `title` | string | 批注标题 |
 | `content` | string | 批注正文内容 |
 
-**索引匹配模式**：指定 `table_index`/`row_index`/`col_index` 精确定位到某个单元格。
+**索引匹配模式**：指定 `table_index` 精确定位到某个单元格。
 
 **通配匹配模式**：不指定索引，程序自动遍历全文档所有表格的所有单元格，查找包含 `match_text` 的第一个单元格。
 
