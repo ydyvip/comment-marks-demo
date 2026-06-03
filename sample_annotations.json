@@ -6,11 +6,19 @@
   },
   {
     "match_text": "元素名称",
+    "target_type": "cell",
+    "table_index": 8,
+    "row_index": 0,
+    "col_index": 0,
     "title": "内容补充",
     "content": "建议此处列举产品研发的具体成果数据，增强说服力。"
   },
   {
     "match_text": "SJJXTJC_RWS_SJYJ",
+    "target_type": "cell",
+    "table_index": 83,
+    "row_index": 1,
+    "col_index": 2,
     "title": "问题说明",
     "content": "成本控制问题需在后文详细展开，建议增加专项章节。"
   }
